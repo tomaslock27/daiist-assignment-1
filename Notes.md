@@ -58,3 +58,11 @@
   the shape instead of me choosing hour groups, which would be subjective and could
   differ between weekdays and weekends.
 - Drop one hour column as reference to avoid duplicating the intercept.
+
+## Decisions from the framing
+- Split: train Dec–Aug, validate Sep, test Oct–Nov (chronological, whole days).
+- Drop `seasons`: training has no autumn, so the model can't learn the Autumn category.
+- Metric: RMSE in bikes + RMSE on weekday rush hours; MAE and R² as support.
+- Log target: decided by validation RMSE in bikes (both versions tried).
+- Safety buffer slider in the dashboard.
+
