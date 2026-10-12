@@ -38,6 +38,13 @@ weather_cols = ["temperature", "humidity", "wind_speed", "visibility",
                 "solar_radiation", "rainfall", "snowfall"]
 features = df[weather_cols].astype(float).copy()
 
+# Temperature squared lets the temperature effect bend: more rentals as it gets
+# warmer, then fewer when it gets too hot (a straight line can't do that).
+features["temperature_sq"] = df["temperature"] ** 2
+
+# Any rain puts cyclists off, even light rain, so a yes/no flag next to the mm amount.
+features["is_raining"] = (df["rainfall"] > 0).astype(float)
+
 # Hour x day-type interaction, one-hot: one column per (working day, hour) and
 # (day off, hour). Working-day hour 0 is left out as the reference category,
 # because all 48 columns together always sum to 1 and would duplicate the intercept.
@@ -48,6 +55,12 @@ for day_type, is_off in [("work", False), ("off", True)]:
         features[f"{day_type}_h{h:02d}"] = ((df["day_off"] == is_off) & (df["hour"] == h)).astype(float)
 
 y = df["rented_bike_count"].to_numpy(dtype=np.float32)
+
+# Log target: the models predict log(1 + rentals) instead of rentals. Effects become
+# multiplicative ("rush hour is 3x busier") instead of fixed ("+800 bikes"), so the
+# peaks can be small in January and big in June. Predictions are converted back to
+# bikes with expm1 before any evaluation.
+y_log = np.log1p(y)
 
 # ------------------------------------------------------------------ 3. Chronological split
 # Train Dec 2017-Aug 2018, validate Sep 2018, test Oct-Nov 2018.
@@ -64,13 +77,13 @@ print(f"Rows: train {train.sum()}, val {val.sum()}, test {test.sum()} | features
 rush = ((~df["day_off"]) & df["hour"].isin([7, 8, 9, 17, 18, 19])).to_numpy()
 
 # ------------------------------------------------------------------ 4a. scikit-learn
-sk_model = LinearRegression().fit(X[train], y[train])
+sk_model = LinearRegression().fit(X[train], y_log[train])
 
 # ------------------------------------------------------------------ 4b. Manual PyTorch loop
 LR = 0.1
 EPOCHS = 1000
 X_train_t = torch.tensor(X[train])
-y_train_t = torch.tensor(y[train])
+y_train_t = torch.tensor(y_log[train])
 
 def mse_loss(y_pred, y_true):
     return ((y_pred - y_true) ** 2).mean()
@@ -89,7 +102,7 @@ for epoch in range(EPOCHS):
         b -= LR * b.grad
     w.grad.zero_()                 # reset, or gradients accumulate
     b.grad.zero_()
-print(f"Manual loop final training MSE:   {loss.item():.1f}")
+print(f"Manual loop final training MSE (log scale):   {loss.item():.5f}")
 
 # ------------------------------------------------------------------ 4c. Standard PyTorch
 model = nn.Linear(X.shape[1], 1)
@@ -103,16 +116,18 @@ for epoch in range(EPOCHS):
     loss = loss_fn(model(X_train_t).squeeze(-1), y_train_t)
     loss.backward()
     optimizer.step()
-print(f"Standard loop final training MSE: {loss.item():.1f}")
+print(f"Standard loop final training MSE (log scale): {loss.item():.5f}")
 
 # ------------------------------------------------------------------ 5. Evaluate
 X_all_t = torch.tensor(X)
 with torch.no_grad():
-    preds = {
+    log_preds = {
         "scikit-learn": sk_model.predict(X),
         "PyTorch manual": forward(X_all_t).numpy(),
         "PyTorch standard": model(X_all_t).squeeze(-1).numpy(),
     }
+# Back from log scale to bikes, so all metrics are in bikes.
+preds = {name: np.expm1(p) for name, p in log_preds.items()}
 preds["Naive baseline (train mean)"] = np.full(len(y), y[train].mean())
 
 def evaluate(mask):
@@ -142,5 +157,6 @@ joblib.dump({
     "X": X,                                   # already scaled, so the app only predicts
     "feature_names": list(features.columns),
     "baseline_mean": float(y[train].mean()),
+    "log_target": True,                       # model outputs must go through np.expm1
 }, ARTIFACTS / "data.joblib")
 print("\nSaved models and data to artifacts/")
