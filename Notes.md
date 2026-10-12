@@ -66,3 +66,45 @@
 - Log target: decided by validation RMSE in bikes (both versions tried).
 - Safety buffer slider in the dashboard.
 
+
+## Feature engineering round 2 (from the error diagnostics)
+
+### What the diagnostics showed
+- Errors were not caused by unseen months: the plots include training data, and the
+  biggest errors (above 30°C, rainy hours) happen in months the model trained on.
+  The problem is the model's shape: straight lines for temperature and rain.
+- Peaks are the same size in January and June: the model adds a fixed rush-hour
+  effect (additive), but in reality peaks are small in winter and big in summer.
+
+### Changes (each judged on validation)
+1. **temperature²**: lets the effect bend (rise with warmth, fall when too hot).
+2. **is_raining (yes/no)**: any rain puts cyclists off, not just heavy rain.
+   - With 1 + 2: validation RMSE 414.7 → 397.8; rush-hour RMSE 705.1 → 661.3.
+3. **Log target**: makes effects multiplicative, so peaks can scale with conditions.
+   - With 1 + 2 + 3: validation RMSE 397.8 → 358.1; rush-hour RMSE 661.3 → 461.1.
+   - Earlier, without 1 + 2, the log target lost (442.9 vs 414.6): it only helped once
+     the temperature and rain problems were fixed.
+   - Decision (made on validation): keep the log target.
+
+### Validation/test disagreement
+- On test (Oct–Nov) the log version is worse: RMSE 408.3 vs 332.7 (raw),
+  rush-hour 640.1 vs 527.4.
+- Reason: both models underpredict in autumn. On dry weekdays at 10–18°C, October
+  averaged ~1,100 rentals vs ~700–1,000 in spring at the same temperatures. Could be
+  the system growing during 2018 or autumn habits; one year of data can't tell them apart.
+  The log version underpredicts more (converting back from logs tends to land low).
+- I keep the log target: the decision was made on validation. Switching because of the
+  test result would mean choosing with the test set, and the test score would no
+  longer be honest.
+- Validation is only one month (September), which is a weak guide. Limitation for the report.
+
+### Agreement between methods
+- The three methods agree within ~0.23 bikes.
+
+## Dashboard findings
+- Scatter plots: points sit below the perfect-prediction line, especially for busy hours.
+  The model systematically under-predicts.
+- With no safety buffer, the model predicts too few bikes in 73.6% of validation hours
+  and 92.5% of test hours.
+- On test, a buffer of about +60% is needed to get hours with shortages below half.
+- Temperature distribution: Sep and Oct–Nov weather differs a lot from the training period.
